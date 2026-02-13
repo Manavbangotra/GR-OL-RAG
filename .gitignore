@@ -54,3 +54,7 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+node_modules/
+frontend/node_modules/
+frontend/package-lock.json
+
