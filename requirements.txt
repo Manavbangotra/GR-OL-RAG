@@ -1,0 +1,39 @@
+# FastAPI and Web Server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# LangChain and LangGraph
+langgraph>=0.0.8
+langchain>=0.1.0
+langchain-core>=0.1.0
+langchain-community>=0.0.13
+langchain-groq>=0.0.1
+
+# Vector Store
+chromadb>=0.4.18
+pysqlite3-binary>=0.5.0  # Required for ChromaDB on systems with old SQLite
+
+# MongoDB
+pymongo>=3.12,<4.0  # Compatible with MongoDB 3.6+
+
+# LLM Providers
+groq>=0.4.0
+ollama>=0.1.0
+
+# Embeddings
+sentence-transformers>=2.2.0
+
+# Document Processing
+pypdf>=3.0.0
+python-docx>=1.0.0
+
+# Utilities
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+httpx>=0.25.0
