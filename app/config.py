@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     chunk_overlap: int = Field(default=200, env="CHUNK_OVERLAP")
     max_upload_size_mb: int = Field(default=50, env="MAX_UPLOAD_SIZE_MB")
     
+    # JWT Authentication
+    jwt_secret_key: str = Field(default="change-me-in-production", env="JWT_SECRET_KEY")
+    jwt_algorithm: str = Field(default="HS256", env="JWT_ALGORITHM")
+    access_token_expire_minutes: int = Field(default=30, env="ACCESS_TOKEN_EXPIRE_MINUTES")
+    refresh_token_expire_days: int = Field(default=7, env="REFRESH_TOKEN_EXPIRE_DAYS")
+
     # API Configuration
     api_host: str = Field(default="0.0.0.0", env="API_HOST")
     api_port: int = Field(default=8000, env="API_PORT")

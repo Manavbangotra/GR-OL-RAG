@@ -2,8 +2,8 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
-  max-width: 1200px;
-  margin: 0 auto;
+  flex: 1;
+  min-width: 0;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }
 
@@ -229,6 +229,17 @@
 .send-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.cursor-blink {
+  animation: blink 0.7s step-end infinite;
+  font-weight: bold;
+  color: #667eea;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 .spin {

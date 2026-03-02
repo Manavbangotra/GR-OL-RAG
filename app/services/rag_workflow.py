@@ -1,6 +1,6 @@
-"""LangGraph RAG workflow with state management"""
+"""LangGraph RAG workflow with state management and streaming support"""
 
-from typing import TypedDict, List, Dict, Any, Annotated
+from typing import TypedDict, List, Dict, Any, Generator
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
 import logging
@@ -26,188 +26,115 @@ class RAGState(TypedDict):
 
 
 class RAGWorkflow:
-    """LangGraph-based RAG workflow"""
-    
+    """LangGraph-based RAG workflow with streaming support"""
+
     def __init__(
         self,
         checkpointer: BaseCheckpointSaver = None,
         llm_provider: str = None
     ):
-        """Initialize RAG workflow
-        
-        Args:
-            checkpointer: MongoDB checkpointer for state persistence
-            llm_provider: LLM provider to use
-        """
         self.checkpointer = checkpointer
         self.vector_store = get_vector_store()
         self.llm_service = get_llm_service(llm_provider)
-        
+
         # Build the graph
         self.graph = self._build_graph()
-        
+
         logger.info("Initialized RAG workflow")
-    
+
     def _build_graph(self) -> StateGraph:
-        """Build the LangGraph workflow
-        
-        Returns:
-            Compiled StateGraph
-        """
-        # Create graph
         workflow = StateGraph(RAGState)
-        
-        # Add nodes
+
         workflow.add_node("process_query", self.process_query)
         workflow.add_node("retrieve_documents", self.retrieve_documents)
         workflow.add_node("format_context", self.format_context)
         workflow.add_node("generate_answer", self.generate_answer)
-        
-        # Define edges
+
         workflow.set_entry_point("process_query")
         workflow.add_edge("process_query", "retrieve_documents")
         workflow.add_edge("retrieve_documents", "format_context")
         workflow.add_edge("format_context", "generate_answer")
         workflow.add_edge("generate_answer", END)
-        
-        # Compile without checkpointer (manual state management)
+
         return workflow.compile()
-    
+
     def process_query(self, state: RAGState) -> RAGState:
-        """Process and clean the user query
-        
-        Args:
-            state: Current workflow state
-            
-        Returns:
-            Updated state
-        """
         query = state["query"].strip()
-        
         logger.info(f"Processing query: {query[:100]}...")
-        
-        return {
-            **state,
-            "query": query
-        }
-    
+        return {**state, "query": query}
+
     def retrieve_documents(self, state: RAGState) -> RAGState:
-        """Retrieve relevant documents from vector store
-        
-        Args:
-            state: Current workflow state
-            
-        Returns:
-            Updated state with retrieved documents
-        """
         query = state["query"]
         top_k = state.get("top_k", 5)
-        
         logger.info(f"Retrieving top {top_k} documents...")
-        
-        # Semantic search
         results = self.vector_store.search(query, top_k=top_k)
-        
         logger.info(f"Retrieved {len(results)} documents")
-        
-        return {
-            **state,
-            "retrieved_docs": results
-        }
-    
+        return {**state, "retrieved_docs": results}
+
     def format_context(self, state: RAGState) -> RAGState:
-        """Format retrieved documents into context
-        
-        Args:
-            state: Current workflow state
-            
-        Returns:
-            Updated state with formatted context
-        """
         docs = state["retrieved_docs"]
-        
         if not docs:
             context = "No relevant documents found."
         else:
-            # Format documents into context
             context_parts = []
             for i, doc in enumerate(docs, 1):
                 filename = doc["metadata"].get("filename", "Unknown")
                 content = doc["content"]
                 context_parts.append(f"[Source {i}: {filename}]\n{content}\n")
-            
             context = "\n".join(context_parts)
-        
+
         logger.info(f"Formatted context: {len(context)} characters")
-        
-        return {
-            **state,
-            "context": context
-        }
-    
+        return {**state, "context": context}
+
     def generate_answer(self, state: RAGState) -> RAGState:
-        """Generate answer using LLM
-        
-        Args:
-            state: Current workflow state
-            
-        Returns:
-            Updated state with generated answer
-        """
         query = state["query"]
         context = state["context"]
         conversation_history = state.get("conversation_history", [])
         llm_provider = state.get("llm_provider")
-        
+
         logger.info("Generating answer with LLM...")
-        
-        # Generate structured answer
+
         structured_answer = self.llm_service.generate(
             prompt=query,
             context=context,
             conversation_history=conversation_history,
             provider=llm_provider
         )
-        
-        # Update conversation history
+
         updated_history = conversation_history.copy()
         updated_history.append({"role": "user", "content": query})
         updated_history.append({"role": "assistant", "content": structured_answer.answer})
-        
+
         logger.info(f"Generated answer with confidence: {structured_answer.confidence}")
-        
+
         return {
             **state,
             "answer": structured_answer.model_dump(),
             "conversation_history": updated_history
         }
-    
+
+    # ── Synchronous run (existing) ──────────────────────────────────────
+
     def run(
         self,
         query: str,
         thread_id: str = None,
         llm_provider: str = None,
-        top_k: int = 5
+        top_k: int = 5,
+        user_id: str = None,
+        title: str = None,
     ) -> Dict[str, Any]:
-        """Run the RAG workflow
-        
-        Args:
-            query: User query
-            thread_id: Thread ID for conversation memory
-            llm_provider: LLM provider to use
-            top_k: Number of documents to retrieve
-            
-        Returns:
-            Workflow result with answer and sources
-        """
+        """Run the full RAG workflow (blocking)."""
         # Load previous state if thread_id provided
         conversation_history = []
+        is_first_message = True
         if thread_id and self.checkpointer:
             previous_state = self.checkpointer.load_state(thread_id)
             if previous_state:
                 conversation_history = previous_state.get("conversation_history", [])
-        
-        # Initial state
+                if conversation_history:
+                    is_first_message = False
+
         initial_state = {
             "query": query,
             "retrieved_docs": [],
@@ -218,49 +145,101 @@ class RAGWorkflow:
             "llm_provider": llm_provider,
             "top_k": top_k
         }
-        
-        # Run workflow
+
         try:
             result = self.graph.invoke(initial_state)
-            
-            # Save state if thread_id provided
+
             if thread_id and self.checkpointer:
-                self.checkpointer.save_state(thread_id, result)
-            
-            # Format response
-            response = {
+                self.checkpointer.save_state(
+                    thread_id,
+                    result,
+                    user_id=user_id,
+                    title=title if is_first_message else None,
+                )
+
+            return {
                 "query": result["query"],
                 "answer": result["answer"].get("answer", ""),
                 "confidence": result["answer"].get("confidence", 0.0),
                 "sources": self._format_sources(result["retrieved_docs"]),
                 "thread_id": thread_id
             }
-            
-            return response
-            
+
         except Exception as e:
             logger.error(f"Error running RAG workflow: {e}")
             raise
-    
-    def _format_sources(self, docs: List[Dict[str, Any]]) -> List[SourceDocument]:
-        """Format retrieved documents as source documents
-        
-        Args:
-            docs: Retrieved documents
-            
-        Returns:
-            List of SourceDocument objects
+
+    # ── Streaming run (NEW) ─────────────────────────────────────────────
+
+    def run_stream(
+        self,
+        query: str,
+        thread_id: str = None,
+        llm_provider: str = None,
+        top_k: int = 5,
+    ) -> Dict[str, Any]:
+        """Run retrieval + context steps (blocking), return context needed for streaming.
+
+        Returns a dict with:
+          - context: formatted context string
+          - conversation_history: loaded history
+          - sources: list of SourceDocument
+          - retrieved_docs: raw docs (for state save)
+          - is_first_message: bool
         """
+        conversation_history = []
+        is_first_message = True
+
+        # load_state is now async — callers must handle this before calling run_stream
+        # We accept pre-loaded conversation_history via a separate method
+
+        initial_state = {
+            "query": query,
+            "retrieved_docs": [],
+            "context": "",
+            "answer": {},
+            "conversation_history": conversation_history,
+            "thread_id": thread_id or "default",
+            "llm_provider": llm_provider,
+            "top_k": top_k,
+        }
+
+        # Run only retrieval + formatting (no LLM call)
+        state = self.process_query(initial_state)
+        state = self.retrieve_documents(state)
+        state = self.format_context(state)
+
+        return {
+            "context": state["context"],
+            "sources": self._format_sources(state["retrieved_docs"]),
+            "retrieved_docs": state["retrieved_docs"],
+            "query": state["query"],
+        }
+
+    def stream_tokens(
+        self,
+        query: str,
+        context: str,
+        conversation_history: List[Dict[str, str]] = None,
+        llm_provider: str = None,
+    ) -> Generator[str, None, None]:
+        """Stream LLM tokens for the given query and context."""
+        yield from self.llm_service.stream(
+            prompt=query,
+            context=context,
+            conversation_history=conversation_history,
+            provider=llm_provider,
+        )
+
+    def _format_sources(self, docs: List[Dict[str, Any]]) -> List[SourceDocument]:
         sources = []
-        
         for doc in docs:
             sources.append(SourceDocument(
-                content=doc["content"][:500],  # Truncate for response
+                content=doc["content"][:500],
                 filename=doc["metadata"].get("filename", "Unknown"),
                 page=doc["metadata"].get("page"),
                 score=doc["score"]
             ))
-        
         return sources
 
 
@@ -269,14 +248,6 @@ _workflow = None
 
 
 def get_rag_workflow(checkpointer: BaseCheckpointSaver = None) -> RAGWorkflow:
-    """Get or create the global RAG workflow instance
-    
-    Args:
-        checkpointer: Optional checkpointer
-        
-    Returns:
-        RAGWorkflow instance
-    """
     global _workflow
     if _workflow is None:
         _workflow = RAGWorkflow(checkpointer=checkpointer)
